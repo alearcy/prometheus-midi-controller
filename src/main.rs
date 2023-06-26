@@ -2,7 +2,7 @@ use console::{Style, Term};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
 use midi_control::*;
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
-use serialport::*;
+use serialport::{SerialPort, SerialPortInfo, SerialPortType};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -29,11 +29,11 @@ fn midi_term_settings() -> Option<MidiOutputConnection> {
     let mut midi_devices_names: Vec<String> = Vec::new();
     let mut midi_ports: Vec<&MidiOutputPort> = Vec::new();
     if ports.len() > 0 {
-        for p in ports.iter() {
+        ports.iter().for_each(|p| {
             let midi_port_name = midi_out.port_name(p).unwrap();
             midi_devices_names.push(midi_port_name);
             midi_ports.push(p);
-        }
+        });
     } else {
         println!("{}", cyan.apply_to("No MIDI output device found"));
     }
@@ -57,12 +57,20 @@ fn midi_term_settings() -> Option<MidiOutputConnection> {
 
 fn serial_term_settings() -> Option<Box<dyn SerialPort>> {
     let cyan = Style::new().cyan();
-    let mut serial_port_name = String::from("");
+    let mut selected_port_name = String::from("");
     let mut serial_devices: Vec<String> = Vec::new();
     let serialports: Vec<SerialPortInfo> = serialport::available_ports().unwrap();
-    for port in serialports.into_iter() {
-        serial_devices.push(port.port_name);
-    }
+    let mut ports_info: HashMap<String, String> = HashMap::from([]);
+    serialports.into_iter().for_each(|port| {
+        let (visual_name, port_name) = match port.port_type {
+            SerialPortType::UsbPort(info) => (info.product.unwrap(), port.port_name),
+            SerialPortType::PciPort => (port.port_name.clone(), port.port_name),
+            SerialPortType::BluetoothPort => (port.port_name.clone(), port.port_name),
+            SerialPortType::Unknown => (port.port_name.clone(), port.port_name),
+        };
+        serial_devices.push(visual_name.clone());
+        ports_info.insert(visual_name, port_name);
+    });
     println!("Select a {}", cyan.apply_to("serial port"));
     let serial_selection = FuzzySelect::with_theme(&ColorfulTheme::default())
         .items(&serial_devices)
@@ -71,10 +79,16 @@ fn serial_term_settings() -> Option<Box<dyn SerialPort>> {
         .unwrap();
 
     match serial_selection {
-        Some(index) => serial_port_name.push_str(serial_devices[index].as_str()),
+        Some(index) => {
+            for (info, name) in ports_info.iter() {
+                if &serial_devices[index] == info {
+                    selected_port_name = name.to_string();
+                }
+            }
+        },
         None => println!("You did not select anything"),
     }
-    let mut port = serialport::new(&serial_port_name, 115_200)
+    let mut port = serialport::new(&selected_port_name, 115_200)
         .timeout(Duration::from_millis(100))
         .open()
         .unwrap();
