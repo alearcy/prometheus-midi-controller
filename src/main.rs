@@ -1,7 +1,7 @@
 use console::{Style, Term};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
 use midi_control::*;
-use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};;
+use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 use serialport::{SerialPort, SerialPortInfo, SerialPortType};
 use std::collections::HashMap;
 use std::io::BufReader;
