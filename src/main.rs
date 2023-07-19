@@ -1,9 +1,12 @@
 use console::{Style, Term};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
 use midi_control::*;
-use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
+use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};;
 use serialport::{SerialPort, SerialPortInfo, SerialPortType};
 use std::collections::HashMap;
+use std::io::BufReader;
+use std::io::BufRead;
+use std::io::ErrorKind::TimedOut;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -89,7 +92,7 @@ fn serial_term_settings() -> Option<Box<dyn SerialPort>> {
         None => println!("You did not select anything"),
     }
     let mut port = serialport::new(&selected_port_name, 115_200)
-        .timeout(Duration::from_millis(100))
+        .timeout(Duration::from_millis(1))
         .open()
         .unwrap();
     port.set_flow_control(serialport::FlowControl::Hardware)
@@ -107,39 +110,37 @@ fn run(
 ) {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_me = stop.clone();
-    let mut buf: [u8; 2] = [0; 2];
-    let mut previous_buf: Vec<u8> = vec![0,0];
     let thread = thread::spawn(move || {
         let input = ask_for_quitting();
         if input == "q" {
             stop_me.store(true, Ordering::Relaxed);
         }
     });
+    let mut reader = BufReader::new(&mut *serial);
+    let mut my_str = String::new();
     loop {
-        let serial_read = serial.read(buf.as_mut_slice());
-        match serial_read {
-            Ok(_) => {
-                match previous_buf[0] != buf[0] || previous_buf[1] != buf[1] {
-                    true => {
-                        previous_buf = vec![0,0];
-                        previous_buf[0] = buf[0];
-                        previous_buf[1] = buf[1];
-                        let arduino_pin = &previous_buf[0];
-                        let value = &previous_buf[1];
-                        let cc = faders.get(&arduino_pin).unwrap();
-                        let message = midi_control::control_change(Channel::Ch1, *cc, *value);
-                        let message_byte: Vec<u8> = message.into();
-                        let _ = &mut midi.send(&message_byte).unwrap();
-                    },
-                    false => {},
-                };
+        let read_line = reader.read_line(&mut my_str);
+        match read_line {
+            Ok(_n) => {
+                let string_to_split = my_str.clone();
+                my_str.clear();
+                let message_values: Vec<&str> = string_to_split.split(",").collect();
+                let arduino_pin = message_values[0].parse().unwrap();
+                let value = message_values[1].to_owned();
+                let parsed_value = &value[0..value.len() - 1].to_owned().parse().unwrap();
+                let cc = faders.get(&arduino_pin).unwrap();
+                let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
+                let message_byte: Vec<u8> = message.into();
+                let _ = &mut midi.send(&message_byte).unwrap();
             },
-            Err(_e) => {
-                if stop.load(Ordering::Relaxed) == true {
-                    break;
+            Err(e) => {
+                if e.kind() == TimedOut {
+                    if stop.load(Ordering::Relaxed) == true {
+                        break;
+                    }
                 }
             }
-        };
+        }
     }
     thread.join().unwrap();
 }
