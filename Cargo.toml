@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 console = "0.15.7"
 dialoguer = {version = "0.10.4", features = ["fuzzy-select"]}
+eframe = "0.22.0"
 midi-control = "0.2.2"
 midir = "0.9.1"
 serialport = "4.2.1"
