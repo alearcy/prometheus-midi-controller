@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-// (arduino pin, cc)S
+
 #[derive(Debug)]
 pub struct Faders {
     pub pins: HashMap<u8, u8>
