@@ -26,5 +26,4 @@ impl MidiSettings {
         }
         self.midi_ports.clone()
     }
-
 }

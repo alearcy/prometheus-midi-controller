@@ -1,107 +1,203 @@
-use dialoguer::Input;
+use eframe::egui::{Button, Slider};
+use eframe::egui::{CentralPanel, ComboBox, Context};
+use faders::Faders;
 use midi_control::*;
 use midir::MidiOutputConnection;
 use serialport::SerialPort;
-use std::io::BufReader;
+use std::collections::HashMap;
+use std::error::Error;
 use std::io::BufRead;
-use std::io::ErrorKind::TimedOut;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-use std::thread;
+use std::io::BufReader;
 mod faders;
 mod midi;
 mod serial;
 
-fn main() {
+struct MyEguiApp {
+    selected_midi_device: String,
+    selected_serial_port: String,
+    faders: Faders,
+    available_midi_devices: HashMap<String, midir::MidiOutputPort>,
+    available_serial_ports: HashMap<String, String>,
+    f1value: u8,
+    f2value: u8,
+    f3value: u8,
+    f4value: u8,
+    is_connected: bool,
+}
+
+impl MyEguiApp {
+    fn new(
+        available_midi_devices: HashMap<String, midir::MidiOutputPort>,
+        available_serial_ports: HashMap<String, String>,
+        faders: Faders,
+    ) -> Self {
+        Self {
+            available_midi_devices,
+            available_serial_ports,
+            selected_midi_device: String::from(""),
+            selected_serial_port: String::from(""),
+            faders,
+            f1value: 0,
+            f2value: 0,
+            f3value: 0,
+            f4value: 0,
+            is_connected: false,
+        }
+    }
+}
+
+impl eframe::App for MyEguiApp {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        CentralPanel::default().show(ctx, |ui| {
+            ComboBox::from_label("Choose MIDI output device")
+                .selected_text(format!(
+                    "{midi_device}",
+                    midi_device = self.selected_midi_device
+                ))
+                .show_ui(ui, |ui| {
+                    self.available_midi_devices
+                        .clone()
+                        .into_iter()
+                        .for_each(|(name, _)| {
+                            ui.selectable_value(
+                                &mut self.selected_midi_device,
+                                name.to_owned(),
+                                name.to_owned(),
+                            );
+                        });
+                });
+            ComboBox::from_label("Choose serial port")
+                .selected_text(format!(
+                    "{serial_port}",
+                    serial_port = self.selected_serial_port
+                ))
+                .show_ui(ui, |ui| {
+                    self.available_serial_ports
+                        .clone()
+                        .into_iter()
+                        .for_each(|(name, _)| {
+                            ui.selectable_value(
+                                &mut self.selected_serial_port,
+                                name.to_owned(),
+                                name.to_owned(),
+                            );
+                        });
+                });
+            if ui.add(Button::new("Connect")).clicked() {
+                let (mut midi, mut serial, is_connected) = connect(
+                    &self.available_midi_devices,
+                    &self.selected_midi_device,
+                    &self.selected_serial_port,
+                    &self.available_serial_ports
+                ).unwrap();
+                if is_connected {
+                    self.is_connected = true;
+                    let mut reader = BufReader::new(&mut *serial);
+                    let mut my_str = String::new();
+                    //TODO: il loop blocca l'esecuzione del programma
+                    loop {
+                        match reader.read_line(&mut my_str) {
+                            Ok(_n) => {
+                                let string_to_split = my_str.clone();
+                                my_str.clear();
+                                let message_values: Vec<&str> = string_to_split.split(",").collect();
+                                let arduino_pin = message_values[0].parse().unwrap();
+                                let value = message_values[1].to_owned();
+                                let parsed_value = &value[0..value.len() - 1].to_owned().parse().unwrap();
+                                let cc = self.faders.pins.get(&arduino_pin).unwrap();
+                                let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
+                                let message_byte: Vec<u8> = message.into();
+                                let _ = &mut midi.send(&message_byte).unwrap();
+                            }
+                            Err(error) => {
+                                if error.kind() == std::io::ErrorKind::TimedOut {
+                                    continue;
+                                }
+                            }
+                        }
+                        
+                    }
+                }
+            };
+            ui.horizontal(|ui| {
+                ui.add(
+                    Slider::new(&mut self.f1value, 0..=127)
+                        .text("CC1")
+                        .vertical(),
+                );
+                ui.add(
+                    Slider::new(&mut self.f2value, 0..=127)
+                        .text("CC11")
+                        .vertical(),
+                );
+                ui.add(
+                    Slider::new(&mut self.f3value, 0..=127)
+                        .text("CC2")
+                        .vertical(),
+                );
+                ui.add(
+                    Slider::new(&mut self.f4value, 0..=127)
+                        .text("CC3")
+                        .vertical(),
+                );
+            });
+        });
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
     let faders: faders::Faders = faders::Faders::default();
-    dbg!(&faders);
-    let mut midi_connection = set_midi_connection();
-    let message = midi_control::control_change(Channel::Ch1, 1, 100);
-    let message_byte: Vec<u8> = message.into();
-    midi_connection.send(&message_byte).unwrap();
-    let mut serial = set_serial_connection();
-    run(&mut serial, &faders, &mut midi_connection);
+    let available_midi_devices = set_midi_connection()?;
+    let serial_ports = set_serial_connection();
+    run(serial_ports, faders, available_midi_devices)?;
+    Ok(())
 }
 
-//TODO: return Option
-fn set_midi_connection() -> MidiOutputConnection {
+fn set_midi_connection() -> Result<HashMap<String, midir::MidiOutputPort>, Box<dyn Error>> {
     let mut midi = midi::MidiSettings::new();
-    let available_ports = midi.get_out_ports();
-    let selected_midi_device = String::from("arcy-pc");
-    return midi.midi_out.connect(&available_ports.get(&selected_midi_device).unwrap(), "port_name").unwrap();
+    let available_devices: HashMap<String, midir::MidiOutputPort> = midi.get_out_ports();
+    Ok(available_devices)
 }
 
-//TODO: return Option
-fn set_serial_connection() -> Box<dyn SerialPort> {
+fn set_serial_connection() -> HashMap<String, String> {
     let mut serial = serial::SerialSettings::new();
-    let available_ports = serial.get_ports();
-    dbg!(available_ports);
-    serial.set_new_port("COM13".to_owned(), 115_200, 1, serialport::FlowControl::Hardware);
-    serial.port
+    let ports = serial.get_ports();
+    dbg!(&ports);
+    ports
+}
+
+fn connect(
+    midi_devices: &HashMap<String, midir::MidiOutputPort>,
+    selected_midi_device: &String,
+    selected_serial_port: &String,
+    serial_ports: &HashMap<String, String>,
+) -> Result<(MidiOutputConnection, Box<dyn SerialPort>, bool), Box<dyn Error>> {
+    let midi_connection = midi::MidiSettings::new().midi_out.connect(
+        midi_devices.get(selected_midi_device).unwrap(),
+        "port_name",
+    )?;
+    let mut serial = serial::SerialSettings::new();
+    let port = serial_ports.get(selected_serial_port).unwrap();
+    serial.set_new_port(
+        port.to_string(),
+        115_200,
+        1,
+        serialport::FlowControl::Hardware,
+    );
+    Ok((midi_connection, serial.port, true))
 }
 
 fn run(
-    serial: &mut Box<dyn SerialPort>,
-    faders: &faders::Faders,
-    midi: &mut MidiOutputConnection,
-) {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_me = stop.clone();
-    let thread = thread::spawn(move || {
-        let input = ask_for_quitting();
-        if input == "q" {
-            stop_me.store(true, Ordering::Relaxed);
-        }
-    });
-    let mut reader = BufReader::new(&mut *serial);
-    let mut my_str = String::new();
-    loop {
-        let read_line = reader.read_line(&mut my_str);
-        match read_line {
-            Ok(_n) => {
-                let string_to_split = my_str.clone();
-                my_str.clear();
-                let message_values: Vec<&str> = string_to_split.split(",").collect();
-                let arduino_pin = message_values[0].parse().unwrap();
-                let value = message_values[1].to_owned();
-                let parsed_value = &value[0..value.len() - 1].to_owned().parse().unwrap();
-                let cc = faders.pins.get(&arduino_pin).unwrap();
-                let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
-                let message_byte: Vec<u8> = message.into();
-                let _ = &mut midi.send(&message_byte).unwrap();
-            },
-            Err(e) => {
-                if e.kind() == TimedOut {
-                    if stop.load(Ordering::Relaxed) == true {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    thread.join().unwrap();
+    serial: HashMap<String, String>,
+    faders: faders::Faders,
+    available_midi_devices: HashMap<String, midir::MidiOutputPort>,
+) -> Result<(), std::io::Error> {
+    let native_options = eframe::NativeOptions::default();
+    let app = MyEguiApp::new(available_midi_devices, serial, faders);
+    let _ = eframe::run_native(
+        "AA - serial to midi",
+        native_options,
+        Box::new(|_cc| Box::new(app)),
+    );
+    Ok(())
 }
-
-fn ask_for_quitting() -> String {
-    let input: String = Input::new()
-        .with_prompt(format!(
-            "{} {}",
-            "Prometheus started!\n\n",
-            String::from("Press [q] to quit")
-        ))
-        .interact_text()
-        .unwrap();
-    input
-}
-
-// change faders
-//             let first_value: u8 = faders_vec[0].to_owned().parse().unwrap();
-//             let second_value: u8 = faders_vec[1].to_owned().parse().unwrap();
-//             let third_value: u8 = faders_vec[2].to_owned().parse().unwrap();
-//             let fourth_value: u8 = faders_vec[3].to_owned().parse().unwrap();
-//             *faders.pins.get_mut(&18).unwrap() = first_value;
-//             *faders.pins.get_mut(&19).unwrap() = second_value;
-//             *faders.pins.get_mut(&20).unwrap() = third_value;
-//             *faders.pins.get_mut(&21).unwrap() = fourth_value;
