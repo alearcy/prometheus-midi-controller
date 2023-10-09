@@ -9,6 +9,7 @@ use std::error::Error;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::thread;
+use std::sync::{Arc, Mutex};
 mod faders;
 mod midi;
 mod serial;
@@ -19,10 +20,10 @@ struct App {
     faders: Faders,
     available_midi_devices: HashMap<String, midir::MidiOutputPort>,
     available_serial_ports: HashMap<String, String>,
-    f1value: u8,
-    f2value: u8,
-    f3value: u8,
-    f4value: u8,
+    f1value: Arc<Mutex<u8>>,
+    f2value: Arc<Mutex<u8>>,
+    f3value: Arc<Mutex<u8>>,
+    f4value: Arc<Mutex<u8>>,
     is_connected: bool,
 }
 
@@ -38,10 +39,10 @@ impl App {
             selected_midi_device: String::from(""),
             selected_serial_port: String::from(""),
             faders,
-            f1value: 0,
-            f2value: 0,
-            f3value: 0,
-            f4value: 0,
+            f1value: Arc::new(Mutex::new(0)),
+            f2value: Arc::new(Mutex::new(0)),
+            f3value: Arc::new(Mutex::new(0)),
+            f4value: Arc::new(Mutex::new(0)),
             is_connected: false,
         }
     }
@@ -50,7 +51,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         CentralPanel::default().show(ctx, |ui| {
-            ComboBox::from_label("Choose MIDI output device")
+            ComboBox::from_label("MIDI out")
                 .selected_text(format!(
                     "{midi_device}",
                     midi_device = self.selected_midi_device
@@ -67,7 +68,7 @@ impl eframe::App for App {
                             );
                         });
                 });
-            ComboBox::from_label("Choose serial port")
+            ComboBox::from_label("Serial port")
                 .selected_text(format!(
                     "{serial_port}",
                     serial_port = self.selected_serial_port
@@ -91,9 +92,16 @@ impl eframe::App for App {
                     &self.selected_serial_port,
                     &self.available_serial_ports
                 ).unwrap();
+
                 if is_connected {
                     self.is_connected = true;
                     let faders = self.faders.clone();
+                    let f1value = Arc::clone(&self.f1value);
+                    let f2value = Arc::clone(&self.f2value);
+                    let f3value = Arc::clone(&self.f3value);
+                    let f4value = Arc::clone(&self.f4value);
+                    let context = ctx.clone();
+
                     thread::spawn(move || {
                         let mut reader = BufReader::new(&mut *serial);
                         let mut my_str = String::new();
@@ -105,8 +113,31 @@ impl eframe::App for App {
                                     let message_values: Vec<&str> = string_to_split.split(",").collect();
                                     let arduino_pin = message_values[0].parse().unwrap();
                                     let value = message_values[1].to_owned();
-                                    let parsed_value = &value[0..value.len() - 1].to_owned().parse().unwrap();
+                                    let parsed_value: &u8 = &value[0..value.len() - 1].to_owned().parse().unwrap();
                                     let cc = faders.pins.get(&arduino_pin).unwrap();
+                                    match arduino_pin {
+                                        18 => {
+                                            let mut f1 = f1value.lock().unwrap();
+                                            *f1 = parsed_value.clone();
+                                            context.request_repaint();
+                                        },
+                                        19 => {
+                                            let mut f2 = f2value.lock().unwrap();
+                                            *f2 = parsed_value.clone();
+                                            context.request_repaint();
+                                        },
+                                        20 => {
+                                            let mut f3 = f3value.lock().unwrap();
+                                            *f3 = parsed_value.clone();
+                                            context.request_repaint();
+                                        },
+                                        21 => {
+                                            let mut f4 = f4value.lock().unwrap();
+                                            *f4 = parsed_value.clone();
+                                            context.request_repaint();
+                                        },
+                                        _ => ()
+                                    }
                                     let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
                                     let message_byte: Vec<u8> = message.into();
                                     let _ = &mut midi.send(&message_byte).unwrap();
@@ -125,22 +156,22 @@ impl eframe::App for App {
             };
             ui.horizontal(|ui| {
                 ui.add(
-                    Slider::new(&mut self.f1value, 0..=127)
+                    Slider::new(&mut *self.f1value.lock().unwrap(), 0..=127)
                         .text("CC1")
                         .vertical(),
                 );
                 ui.add(
-                    Slider::new(&mut self.f2value, 0..=127)
+                    Slider::new(&mut *self.f2value.lock().unwrap(), 0..=127)
                         .text("CC11")
                         .vertical(),
                 );
                 ui.add(
-                    Slider::new(&mut self.f3value, 0..=127)
+                    Slider::new(&mut *self.f3value.lock().unwrap(), 0..=127)
                         .text("CC2")
                         .vertical(),
                 );
                 ui.add(
-                    Slider::new(&mut self.f4value, 0..=127)
+                    Slider::new(&mut *self.f4value.lock().unwrap(), 0..=127)
                         .text("CC3")
                         .vertical(),
                 );
