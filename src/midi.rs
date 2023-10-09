@@ -15,7 +15,7 @@ impl MidiSettings {
             midi_ports: HashMap::new(),
         }
     }
-    //TODO: return Option
+
     pub fn get_out_ports(&mut self) -> HashMap<String, MidiOutputPort> {
         let ports: Vec<MidiOutputPort> = self.midi_out.ports();
         if ports.len() > 0 {

@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::thread;
 mod faders;
 mod midi;
 mod serial;
 
-struct MyEguiApp {
+struct App {
     selected_midi_device: String,
     selected_serial_port: String,
     faders: Faders,
@@ -25,7 +26,7 @@ struct MyEguiApp {
     is_connected: bool,
 }
 
-impl MyEguiApp {
+impl App {
     fn new(
         available_midi_devices: HashMap<String, midir::MidiOutputPort>,
         available_serial_ports: HashMap<String, String>,
@@ -46,7 +47,7 @@ impl MyEguiApp {
     }
 }
 
-impl eframe::App for MyEguiApp {
+impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         CentralPanel::default().show(ctx, |ui| {
             ComboBox::from_label("Choose MIDI output device")
@@ -92,31 +93,34 @@ impl eframe::App for MyEguiApp {
                 ).unwrap();
                 if is_connected {
                     self.is_connected = true;
-                    let mut reader = BufReader::new(&mut *serial);
-                    let mut my_str = String::new();
-                    //TODO: il loop blocca l'esecuzione del programma
-                    loop {
-                        match reader.read_line(&mut my_str) {
-                            Ok(_n) => {
-                                let string_to_split = my_str.clone();
-                                my_str.clear();
-                                let message_values: Vec<&str> = string_to_split.split(",").collect();
-                                let arduino_pin = message_values[0].parse().unwrap();
-                                let value = message_values[1].to_owned();
-                                let parsed_value = &value[0..value.len() - 1].to_owned().parse().unwrap();
-                                let cc = self.faders.pins.get(&arduino_pin).unwrap();
-                                let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
-                                let message_byte: Vec<u8> = message.into();
-                                let _ = &mut midi.send(&message_byte).unwrap();
-                            }
-                            Err(error) => {
-                                if error.kind() == std::io::ErrorKind::TimedOut {
-                                    continue;
+                    let faders = self.faders.clone();
+                    thread::spawn(move || {
+                        let mut reader = BufReader::new(&mut *serial);
+                        let mut my_str = String::new();
+                        loop {
+                            match reader.read_line(&mut my_str) {
+                                Ok(_n) => {
+                                    let string_to_split = my_str.clone();
+                                    my_str.clear();
+                                    let message_values: Vec<&str> = string_to_split.split(",").collect();
+                                    let arduino_pin = message_values[0].parse().unwrap();
+                                    let value = message_values[1].to_owned();
+                                    let parsed_value = &value[0..value.len() - 1].to_owned().parse().unwrap();
+                                    let cc = faders.pins.get(&arduino_pin).unwrap();
+                                    let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
+                                    let message_byte: Vec<u8> = message.into();
+                                    let _ = &mut midi.send(&message_byte).unwrap();
+                                }
+                                Err(error) => {
+                                    if error.kind() == std::io::ErrorKind::TimedOut {
+                                        continue;
+                                    } else {
+                                        break;
+                                    }
                                 }
                             }
                         }
-                        
-                    }
+                    });
                 }
             };
             ui.horizontal(|ui| {
@@ -162,7 +166,6 @@ fn set_midi_connection() -> Result<HashMap<String, midir::MidiOutputPort>, Box<d
 fn set_serial_connection() -> HashMap<String, String> {
     let mut serial = serial::SerialSettings::new();
     let ports = serial.get_ports();
-    dbg!(&ports);
     ports
 }
 
@@ -193,7 +196,7 @@ fn run(
     available_midi_devices: HashMap<String, midir::MidiOutputPort>,
 ) -> Result<(), std::io::Error> {
     let native_options = eframe::NativeOptions::default();
-    let app = MyEguiApp::new(available_midi_devices, serial, faders);
+    let app = App::new(available_midi_devices, serial, faders);
     let _ = eframe::run_native(
         "AA - serial to midi",
         native_options,

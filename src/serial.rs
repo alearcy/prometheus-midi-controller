@@ -17,7 +17,7 @@ impl SerialSettings {
             port: serialport::new("COM1", 115_200).open().unwrap(), //FIXME
         }
     }
-    //TODO: make optional
+
     pub fn get_ports(&mut self) -> HashMap<String, String> {
         self.serialports.iter().for_each(|port| {
             let (visual_name, port_name) = match &port.port_type {
