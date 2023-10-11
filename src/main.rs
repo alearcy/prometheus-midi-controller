@@ -1,5 +1,7 @@
-use eframe::egui::{Button, Slider};
-use eframe::egui::{CentralPanel, ComboBox, Context};
+use eframe::emath::{Align2, Align};
+use eframe::epaint::{FontId, vec2, Vec2};
+use eframe::NativeOptions;
+use eframe::egui::{CentralPanel, ComboBox, Context, Button, Slider, Sense, Id, Ui, Layout, RichText};
 use faders::Faders;
 use midi_control::*;
 use midir::MidiOutputConnection;
@@ -49,8 +51,16 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &Context, frame: &mut eframe::Frame) {
         CentralPanel::default().show(ctx, |ui| {
+            let app_rect = ui.max_rect();
+            let title_bar_height = 16.0;
+            let title_bar_rect = {
+                let mut rect = app_rect;
+                rect.max.y = title_bar_height;
+                rect
+            };
+            window_bar_ui(ui, frame, title_bar_rect);
             ComboBox::from_label("MIDI out")
                 .selected_text(format!(
                     "{midi_device}",
@@ -180,12 +190,45 @@ impl eframe::App for App {
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let faders: faders::Faders = faders::Faders::default();
-    let available_midi_devices = set_midi_connection()?;
-    let serial_ports = set_serial_connection();
-    run(serial_ports, faders, available_midi_devices)?;
-    Ok(())
+fn window_bar_ui(
+    ui: &mut Ui,
+    frame: &mut eframe::Frame,
+    title_bar_rect: eframe::epaint::Rect
+) {
+
+    let title_bar_response = ui.interact(title_bar_rect, Id::new("title_bar"), Sense::click());
+
+    if title_bar_response.is_pointer_button_down_on() {
+        frame.drag_window();
+    }
+
+    ui.allocate_ui_at_rect(title_bar_rect, |ui| {
+        ui.with_layout(Layout::right_to_left(Align::Max), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.visuals_mut().button_frame = false;
+            close_minimize(ui, frame);
+        });
+    });
+}
+
+// Show some close/minimize buttons for the native window.
+fn close_minimize(ui: &mut Ui, frame: &mut eframe::Frame) {
+
+    let button_height = 12.0;
+
+    let close_response = ui
+        .add(Button::new(RichText::new("❌").size(button_height)))
+        .on_hover_text("Close the window");
+    if close_response.clicked() {
+        frame.close();
+    }
+
+    let minimized_response = ui
+        .add(Button::new(RichText::new("🗕").size(button_height)))
+        .on_hover_text("Minimize the window");
+    if minimized_response.clicked() {
+        frame.set_minimized(true);
+    }
 }
 
 fn set_midi_connection() -> Result<HashMap<String, midir::MidiOutputPort>, Box<dyn Error>> {
@@ -221,17 +264,30 @@ fn connect(
     Ok((midi_connection, serial.port, true))
 }
 
-fn run(
-    serial: HashMap<String, String>,
-    faders: faders::Faders,
-    available_midi_devices: HashMap<String, midir::MidiOutputPort>,
-) -> Result<(), std::io::Error> {
-    let native_options = eframe::NativeOptions::default();
-    let app = App::new(available_midi_devices, serial, faders);
+fn run() -> Result<(), Box<dyn Error>> {
+    let faders: faders::Faders = faders::Faders::default();
+    let available_midi_devices = set_midi_connection()?;
+    let serial_ports = set_serial_connection();
+    let native_options = NativeOptions {
+        initial_window_size: Some(Vec2::new(260.0, 260.0)),
+        max_window_size: Some(Vec2::new(260.0, 260.0)),
+        resizable: false,
+        centered: true,
+        icon_data: Some(eframe::IconData::try_from_png_bytes(include_bytes!("../assets/icon.png")).unwrap()),
+        decorated: false,
+        ..Default::default()
+    };
+    let app = App::new(available_midi_devices, serial_ports, faders);
     let _ = eframe::run_native(
-        "AA - serial to midi",
+        "Composer controller",
         native_options,
-        Box::new(|_cc| Box::new(app)),
+        Box::new(|_cc: &eframe::CreationContext<'_>| Box::new(app)),
     );
     Ok(())
 }
+
+fn main() -> Result<(), Box<dyn Error>> {
+    run()?;
+    Ok(())
+}
+
