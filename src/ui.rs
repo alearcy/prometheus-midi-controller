@@ -2,7 +2,8 @@ use crate::faders::Faders;
 use crate::midi::MidiSettings;
 use crate::serial::SerialSettings;
 use eframe::egui::{
-    Button, CentralPanel, ComboBox, Context, Direction, Id, Layout, RichText, Sense, Slider, Ui,
+    Button, CentralPanel, Color32, ComboBox, Context, Direction, Id, Layout, RichText, Sense,
+    Slider, Ui,
 };
 use eframe::emath::Align;
 use eframe::epaint::Vec2;
@@ -62,46 +63,61 @@ impl eframe::App for App {
                 rect
             };
             window_bar_ui(ui, frame, title_bar_rect);
-            ComboBox::from_label("MIDI out")
-                .selected_text(format!(
-                    "{midi_device}",
-                    midi_device = self.selected_midi_device
-                ))
-                .show_ui(ui, |ui| {
-                    self.available_midi_devices
-                        .clone()
-                        .into_iter()
-                        .for_each(|(name, _)| {
-                            ui.selectable_value(
-                                &mut self.selected_midi_device,
-                                name.to_owned(),
-                                name.to_owned(),
-                            );
-                        });
-                });
-            ComboBox::from_label("Serial port")
-                .selected_text(format!(
-                    "{serial_port}",
-                    serial_port = self.selected_serial_port
-                ))
-                .show_ui(ui, |ui| {
-                    self.available_serial_ports
-                        .clone()
-                        .into_iter()
-                        .for_each(|(name, _)| {
-                            ui.selectable_value(
-                                &mut self.selected_serial_port,
-                                name.to_owned(),
-                                name.to_owned(),
-                            );
-                        });
-                });
+            ui.add_enabled_ui(!self.is_connected, |ui| {
+                ComboBox::from_label("MIDI out")
+                    .selected_text(format!(
+                        "{midi_device}",
+                        midi_device = self.selected_midi_device
+                    ))
+                    .show_ui(ui, |ui| {
+                        self.available_midi_devices
+                            .clone()
+                            .into_iter()
+                            .for_each(|(name, _)| {
+                                ui.selectable_value(
+                                    &mut self.selected_midi_device,
+                                    name.to_owned(),
+                                    name.to_owned(),
+                                );
+                            });
+                    });
+                ComboBox::from_label("Serial port")
+                    .selected_text(format!(
+                        "{serial_port}",
+                        serial_port = self.selected_serial_port
+                    ))
+                    .show_ui(ui, |ui| {
+                        self.available_serial_ports
+                            .clone()
+                            .into_iter()
+                            .for_each(|(name, _)| {
+                                ui.selectable_value(
+                                    &mut self.selected_serial_port,
+                                    name.to_owned(),
+                                    name.to_owned(),
+                                );
+                            });
+                    });
+            });
+
             let button_text = if self.is_connected {
                 "Disconnect"
             } else {
                 "Connect"
             };
-            if ui.add(Button::new(button_text)).clicked() {
+            let (button_bg, _button_color) = if self.is_connected {
+                (Color32::GREEN, Color32::BLACK)
+            } else {
+                (Color32::GRAY, Color32::BLACK)
+            };
+            if ui
+                .add(
+                    Button::new(button_text)
+                        .fill(button_bg)
+                        .min_size(Vec2 { x: 220.0, y: 32.0 }),
+                )
+                .clicked()
+            {
                 let (mut midi, mut serial, is_connected) = connect(
                     &self.available_midi_devices,
                     &self.selected_midi_device,
