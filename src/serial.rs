@@ -1,11 +1,11 @@
 use serialport::{SerialPort, SerialPortInfo, SerialPortType};
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, error::Error, time::Duration};
 
+#[derive(Debug)]
 pub struct SerialSettings {
     pub serial_devices: Vec<String>,
     pub serialports: Vec<SerialPortInfo>,
     pub ports_info: HashMap<String, String>,
-    pub port: Box<dyn SerialPort>,
 }
 
 impl SerialSettings {
@@ -14,7 +14,6 @@ impl SerialSettings {
             serial_devices: Vec::new(),
             serialports: serialport::available_ports().unwrap(),
             ports_info: HashMap::from([]),
-            port: serialport::new("COM1", 115_200).open().unwrap(), //FIXME
         }
     }
 
@@ -38,12 +37,12 @@ impl SerialSettings {
         baud: u32,
         timeout: u64,
         flow_control: serialport::FlowControl,
-    ) {
+    ) -> Result<Box<dyn SerialPort>, Box<dyn Error>> {
         let mut port = serialport::new(port, baud)
             .timeout(Duration::from_millis(timeout))
             .open()
             .unwrap();
-        port.set_flow_control(flow_control).unwrap();
-        self.port = port;
+        port.set_flow_control(flow_control)?;
+        Ok(port)
     }
 }

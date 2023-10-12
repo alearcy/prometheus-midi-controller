@@ -1,10 +1,12 @@
-use eframe::emath::Align;
-use eframe::epaint::Vec2;
-use eframe::NativeOptions;
-use eframe::egui::{CentralPanel, ComboBox, Context, Button, Slider, Sense, Id, Ui, Layout, RichText, Direction};
 use crate::faders::Faders;
 use crate::midi::MidiSettings;
 use crate::serial::SerialSettings;
+use eframe::egui::{
+    Button, CentralPanel, ComboBox, Context, Direction, Id, Layout, RichText, Sense, Slider, Ui,
+};
+use eframe::emath::Align;
+use eframe::epaint::Vec2;
+use eframe::NativeOptions;
 use midi_control::*;
 use midir::MidiOutputConnection;
 use serialport::SerialPort;
@@ -12,8 +14,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::thread;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 struct App {
     selected_midi_device: String,
@@ -94,13 +96,19 @@ impl eframe::App for App {
                             );
                         });
                 });
-            if ui.add(Button::new("Connect")).clicked() {
+            let button_text = if self.is_connected {
+                "Disconnect"
+            } else {
+                "Connect"
+            };
+            if ui.add(Button::new(button_text)).clicked() {
                 let (mut midi, mut serial, is_connected) = connect(
                     &self.available_midi_devices,
                     &self.selected_midi_device,
                     &self.selected_serial_port,
-                    &self.available_serial_ports
-                ).unwrap();
+                    &self.available_serial_ports,
+                )
+                .unwrap();
 
                 if is_connected {
                     self.is_connected = true;
@@ -119,35 +127,41 @@ impl eframe::App for App {
                                 Ok(_n) => {
                                     let string_to_split = my_str.clone();
                                     my_str.clear();
-                                    let message_values: Vec<&str> = string_to_split.split(",").collect();
+                                    let message_values: Vec<&str> =
+                                        string_to_split.split(",").collect();
                                     let arduino_pin = message_values[0].parse().unwrap();
                                     let value = message_values[1].to_owned();
-                                    let parsed_value: &u8 = &value[0..value.len() - 1].to_owned().parse().unwrap();
+                                    let parsed_value: &u8 =
+                                        &value[0..value.len() - 1].to_owned().parse().unwrap();
                                     let cc = faders.pins.get(&arduino_pin).unwrap();
                                     match arduino_pin {
                                         18 => {
                                             let mut f1 = f1value.lock().unwrap();
                                             *f1 = parsed_value.clone();
                                             context.request_repaint();
-                                        },
+                                        }
                                         19 => {
                                             let mut f2 = f2value.lock().unwrap();
                                             *f2 = parsed_value.clone();
                                             context.request_repaint();
-                                        },
+                                        }
                                         20 => {
                                             let mut f3 = f3value.lock().unwrap();
                                             *f3 = parsed_value.clone();
                                             context.request_repaint();
-                                        },
+                                        }
                                         21 => {
                                             let mut f4 = f4value.lock().unwrap();
                                             *f4 = parsed_value.clone();
                                             context.request_repaint();
-                                        },
-                                        _ => ()
+                                        }
+                                        _ => (),
                                     }
-                                    let message = midi_control::control_change(Channel::Ch1, *cc, *parsed_value);
+                                    let message = midi_control::control_change(
+                                        Channel::Ch1,
+                                        *cc,
+                                        *parsed_value,
+                                    );
                                     let message_byte: Vec<u8> = message.into();
                                     let _ = &mut midi.send(&message_byte).unwrap();
                                 }
@@ -163,38 +177,36 @@ impl eframe::App for App {
                     });
                 }
             };
-            ui.with_layout(Layout::centered_and_justified(Direction::LeftToRight), |ui| {
-                ui.add(
-                    Slider::new(&mut *self.f1value.lock().unwrap(), 0..=127)
-                        .text("CC1")
-                        .vertical(),
-                );
-                ui.add(
-                    Slider::new(&mut *self.f2value.lock().unwrap(), 0..=127)
-                        .text("CC11")
-                        .vertical(),
-                );
-                ui.add(
-                    Slider::new(&mut *self.f3value.lock().unwrap(), 0..=127)
-                        .text("CC2")
-                        .vertical(),
-                );
-                ui.add(
-                    Slider::new(&mut *self.f4value.lock().unwrap(), 0..=127)
-                        .text("CC3")
-                        .vertical(),
-                );
-            });
+            ui.with_layout(
+                Layout::centered_and_justified(Direction::LeftToRight),
+                |ui| {
+                    ui.add(
+                        Slider::new(&mut *self.f1value.lock().unwrap(), 0..=127)
+                            .text("CC1")
+                            .vertical(),
+                    );
+                    ui.add(
+                        Slider::new(&mut *self.f2value.lock().unwrap(), 0..=127)
+                            .text("CC11")
+                            .vertical(),
+                    );
+                    ui.add(
+                        Slider::new(&mut *self.f3value.lock().unwrap(), 0..=127)
+                            .text("CC2")
+                            .vertical(),
+                    );
+                    ui.add(
+                        Slider::new(&mut *self.f4value.lock().unwrap(), 0..=127)
+                            .text("CC3")
+                            .vertical(),
+                    );
+                },
+            );
         });
     }
 }
 
-fn window_bar_ui(
-    ui: &mut Ui,
-    frame: &mut eframe::Frame,
-    title_bar_rect: eframe::epaint::Rect
-) {
-
+fn window_bar_ui(ui: &mut Ui, frame: &mut eframe::Frame, title_bar_rect: eframe::epaint::Rect) {
     let title_bar_response = ui.interact(title_bar_rect, Id::new("title_bar"), Sense::click());
 
     if title_bar_response.is_pointer_button_down_on() {
@@ -212,7 +224,6 @@ fn window_bar_ui(
 
 // Show some close/minimize buttons for the native window.
 fn close_minimize(ui: &mut Ui, frame: &mut eframe::Frame) {
-
     let button_height = 12.0;
 
     let close_response = ui
@@ -238,18 +249,16 @@ fn connect(
 ) -> Result<(MidiOutputConnection, Box<dyn SerialPort>, bool), Box<dyn Error>> {
     let midi = MidiSettings::new();
     let mut serial = SerialSettings::new();
-    let midi_connection = midi.midi_out.connect(
-        midi_devices.get(selected_midi_device).unwrap(),
-        "port_name",
-    )?;
+    let midi_connection = midi
+        .midi_out
+        .connect(midi_devices.get(selected_midi_device).unwrap(), "port_name")?;
     let port = serial_ports.get(selected_serial_port).unwrap();
-    serial.set_new_port(
+    let serial_port = serial.set_new_port(
         port.to_string(),
         115_200,
         1,
         serialport::FlowControl::Hardware,
-    );
-    let serial_port = serial.port;
+    )?;
     Ok((midi_connection, serial_port, true))
 }
 
@@ -264,7 +273,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         max_window_size: Some(Vec2::new(260.0, 260.0)),
         resizable: false,
         centered: true,
-        icon_data: Some(eframe::IconData::try_from_png_bytes(include_bytes!("../assets/icon.png")).unwrap()),
+        icon_data: Some(
+            eframe::IconData::try_from_png_bytes(include_bytes!("../assets/icon.png")).unwrap(),
+        ),
         decorated: false,
         ..Default::default()
     };
