@@ -1,6 +1,13 @@
 use crate::faders::Faders;
 use crate::midi::MidiSettings;
 use crate::serial::SerialSettings;
+use axum::{
+    routing::get,
+    Router,
+    extract::{WebSocketUpgrade, ConnectInfo, ws::{WebSocket, Message}},
+    response::IntoResponse,
+    TypedHeader, headers
+};
 use eframe::egui::{
     Button, CentralPanel, Color32, ComboBox, Context, Direction, Id, Layout, RichText, Sense,
     Slider, Ui,
@@ -11,12 +18,17 @@ use eframe::NativeOptions;
 use midi_control::*;
 use midir::MidiOutputConnection;
 use serialport::SerialPort;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 use std::error::Error;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::net::SocketAddr;
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use futures::stream::StreamExt;
+use tower_http::{services::ServeDir, trace::{TraceLayer, DefaultMakeSpan}};
+use serde::{Deserialize, Serialize};
 
 struct App {
     selected_midi_device: String,
@@ -278,7 +290,22 @@ fn connect(
     Ok((midi_connection, serial_port, true))
 }
 
-pub fn run() -> Result<(), Box<dyn Error>> {
+pub async fn run() -> Result<(), Box<dyn Error>> {
+    tokio::spawn(async move {
+        let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app/build");
+        let server = Router::new()
+            .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
+            .route("/ws", get(ws_message))
+            .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::default().include_headers(true)),
+        );
+        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+        axum::Server::bind(&addr)
+            .serve(server.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
     let faders: Faders = Faders::default();
     let mut midi_instance = MidiSettings::new();
     let mut serial_instance = SerialSettings::new();
@@ -301,5 +328,75 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         native_options,
         Box::new(|_cc| Box::new(app)),
     );
+    
     Ok(())
+}
+
+async fn ws_message(
+    ws: WebSocketUpgrade,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
+    let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
+        user_agent.to_string()
+    } else {
+        String::from("Unknown browser")
+    };
+    println!("`{user_agent}` at {addr} connected.");
+    // finalize the upgrade process by returning upgrade callback.
+    // we can customize the callback by sending additional info such as address.
+    ws.on_upgrade(move |socket| handle_socket(socket, addr))
+}
+
+async fn handle_socket(socket: WebSocket, who: SocketAddr) {
+    let (_sender, mut receiver) = socket.split();
+    let _recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            if process_message(msg, who).unwrap().is_break() {
+                break;
+            }
+        }
+    });
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct MidiMessage {
+    channel: u8,
+    midiType: String,
+    value: u8,
+}
+
+fn process_message(msg: Message, who: SocketAddr) -> Result<ControlFlow<(), ()>, ()> {
+    match msg {
+        Message::Text(t) => {
+            println!(">>> {who} sent str: {t:?}");
+            let message: MidiMessage = serde_json::from_str(&t).unwrap();
+            println!(">>> {who} sent converted str: {message:?}");
+        }
+        Message::Binary(d) => {
+            let message = String::from_utf8(d.clone()).unwrap();
+            println!(">>> {} sent {} bytes: {:?} message: {:?}", who, d.len(), d, message);
+        }
+        Message::Close(c) => {
+            if let Some(cf) = c {
+                println!(
+                    ">>> {} sent close with code {} and reason `{}`",
+                    who, cf.code, cf.reason
+                );
+            } else {
+                println!(">>> {who} somehow sent close message without CloseFrame");
+            }
+            return Ok(ControlFlow::Break(()));
+        }
+
+        Message::Pong(v) => {
+            println!(">>> {who} sent pong with {v:?}");
+        }
+        // You should never need to manually handle Message::Ping, as axum's websocket library
+        // will do so for you automagically by replying with Pong and copying the v according to
+        // spec. But if you need the contents of the pings you can see them here.
+        Message::Ping(v) => {
+            println!(">>> {who} sent ping with {v:?}");
+        }
+    }
+    Ok(ControlFlow::Continue(()))
 }

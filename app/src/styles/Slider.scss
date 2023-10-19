@@ -1,0 +1,51 @@
+.slider {
+  position: relative;
+  border-radius: 5px;
+  border: 1.5px solid white;
+  height: 100%;
+  width: 100%;
+  &.editingMode {
+    border: 2px dashed white;
+    .padlock, .edit, .draggable, .resizable   {
+      color: white !important;
+    }
+  }
+  .slider-label {
+    height: 40px;
+    width: 100%;
+    position: absolute;
+    bottom: -50px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+}
+
+.noUi-vertical {
+  height: 100%;
+  width: 2px;
+  .noUi-handle {
+    width: 48px;
+    height: 34px;
+    left: -23px;
+    top: -17px;
+    &:before{
+      width: 14px;
+      height: 1px;
+      left: 17px;
+      top: 14px;
+    }
+    &:after{
+      width: 14px;
+      height: 1px;
+      left: 17px;
+      top: 17px;
+    }
+  }
+}
+
+.noUi-target {
+  border-radius: 0;
+  position: absolute;
+  left: 48%;
+}

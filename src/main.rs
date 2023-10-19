@@ -7,7 +7,8 @@ mod midi;
 mod serial;
 mod ui;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    run()?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    run().await?;
     Ok(())
 }
