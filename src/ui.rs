@@ -1,12 +1,15 @@
-use crate::faders::Faders;
+use crate::{faders::Faders, midi};
 use crate::midi::MidiSettings;
 use crate::serial::SerialSettings;
 use axum::{
-    routing::get,
-    Router,
-    extract::{WebSocketUpgrade, ConnectInfo, ws::{WebSocket, Message}},
+    extract::{
+        ws::{Message, WebSocket},
+        ConnectInfo, WebSocketUpgrade, State,
+    },
+    headers,
     response::IntoResponse,
-    TypedHeader, headers
+    routing::get,
+    Router, TypedHeader,
 };
 use eframe::egui::{
     Button, CentralPanel, Color32, ComboBox, Context, Direction, Id, Layout, RichText, Sense,
@@ -15,10 +18,10 @@ use eframe::egui::{
 use eframe::emath::Align;
 use eframe::epaint::Vec2;
 use eframe::NativeOptions;
+use futures::stream::StreamExt;
 use midi_control::*;
 use midir::MidiOutputConnection;
 use serialport::SerialPort;
-use std::{collections::HashMap, path::PathBuf};
 use std::error::Error;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -26,10 +29,12 @@ use std::net::SocketAddr;
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use futures::stream::StreamExt;
-use tower_http::{services::ServeDir, trace::{TraceLayer, DefaultMakeSpan}};
-use serde::{Deserialize, Serialize};
-
+use std::{collections::HashMap, path::PathBuf};
+use tower_http::{
+    services::ServeDir,
+    trace::{DefaultMakeSpan, TraceLayer},
+};
+use local_ip_address::local_ip;
 struct App {
     selected_midi_device: String,
     selected_serial_port: String,
@@ -130,7 +135,7 @@ impl eframe::App for App {
                 )
                 .clicked()
             {
-                let (mut midi, mut serial, is_connected) = connect(
+                let (midi, mut serial, is_connected) = connect(
                     &self.available_midi_devices,
                     &self.selected_midi_device,
                     &self.selected_serial_port,
@@ -140,6 +145,12 @@ impl eframe::App for App {
 
                 if is_connected {
                     self.is_connected = true;
+                    let my_local_ip = local_ip();
+                    if let Ok(my_local_ip) = my_local_ip {
+                        println!("This is my local IP address: {:?}", my_local_ip);
+                    } else {
+                        println!("Error getting local IP: {:?}", my_local_ip);
+                    }
                     let faders = self.faders.clone();
                     let f1value = Arc::clone(&self.f1value);
                     let f2value = Arc::clone(&self.f2value);
@@ -147,7 +158,32 @@ impl eframe::App for App {
                     let f4value = Arc::clone(&self.f4value);
                     let context = ctx.clone();
 
+                    let midi = Arc::new(Mutex::new(midi));
+                    let midi_clone = Arc::clone(&midi);
+
+                    tokio::spawn(async move {
+                        let assets_dir =
+                            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app/build");
+                        let server = Router::new()
+                            .fallback_service(
+                                ServeDir::new(assets_dir).append_index_html_on_directories(true),
+                            )
+                            .route("/ws", get(ws_message))
+                            .layer(
+                                TraceLayer::new_for_http().make_span_with(
+                                    DefaultMakeSpan::default().include_headers(true),
+                                ),
+                            )
+                            .with_state(midi_clone);
+                        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+                        axum::Server::bind(&addr)
+                            .serve(server.into_make_service_with_connect_info::<SocketAddr>())
+                            .await
+                            .unwrap();
+                    });
+
                     thread::spawn(move || {
+                        let midi_clone = Arc::clone(&midi);
                         let mut reader = BufReader::new(&mut *serial);
                         let mut my_str = String::new();
                         loop {
@@ -191,7 +227,7 @@ impl eframe::App for App {
                                         *parsed_value,
                                     );
                                     let message_byte: Vec<u8> = message.into();
-                                    let _ = &mut midi.send(&message_byte).unwrap();
+                                    let _ = &mut midi_clone.lock().unwrap().send(&message_byte).unwrap();
                                 }
                                 Err(error) => {
                                     if error.kind() == std::io::ErrorKind::TimedOut {
@@ -291,21 +327,6 @@ fn connect(
 }
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
-    tokio::spawn(async move {
-        let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app/build");
-        let server = Router::new()
-            .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
-            .route("/ws", get(ws_message))
-            .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::default().include_headers(true)),
-        );
-        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-        axum::Server::bind(&addr)
-            .serve(server.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .unwrap();
-    });
     let faders: Faders = Faders::default();
     let mut midi_instance = MidiSettings::new();
     let mut serial_instance = SerialSettings::new();
@@ -328,7 +349,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         native_options,
         Box::new(|_cc| Box::new(app)),
     );
-    
+
     Ok(())
 }
 
@@ -336,6 +357,7 @@ async fn ws_message(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(midi): State<Arc<Mutex<MidiOutputConnection>>>,
 ) -> impl IntoResponse {
     let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
         user_agent.to_string()
@@ -345,36 +367,61 @@ async fn ws_message(
     println!("`{user_agent}` at {addr} connected.");
     // finalize the upgrade process by returning upgrade callback.
     // we can customize the callback by sending additional info such as address.
-    ws.on_upgrade(move |socket| handle_socket(socket, addr))
+    ws.on_upgrade(move |socket| handle_socket(socket, addr, midi))
 }
 
-async fn handle_socket(socket: WebSocket, who: SocketAddr) {
+async fn handle_socket(socket: WebSocket, who: SocketAddr, midi: Arc<Mutex<MidiOutputConnection>>) {
     let (_sender, mut receiver) = socket.split();
     let _recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(msg, who).unwrap().is_break() {
+            if process_message(msg, who, midi.clone()).unwrap().is_break() {
                 break;
             }
         }
     });
 }
-#[derive(Debug, Serialize, Deserialize)]
-struct MidiMessage {
-    channel: u8,
-    midiType: String,
-    value: u8,
-}
 
-fn process_message(msg: Message, who: SocketAddr) -> Result<ControlFlow<(), ()>, ()> {
+fn process_message(msg: Message, who: SocketAddr, midi: Arc<Mutex<MidiOutputConnection>>) -> Result<ControlFlow<(), ()>, ()> {
     match msg {
         Message::Text(t) => {
-            println!(">>> {who} sent str: {t:?}");
-            let message: MidiMessage = serde_json::from_str(&t).unwrap();
+            let message: midi::ClientMessage = serde_json::from_str(&t).unwrap();
             println!(">>> {who} sent converted str: {message:?}");
+            if message.midi_type == "cc" {
+                let midi_message = midi_control::control_change(
+                    Channel::Ch1,
+                    message.cc_value,
+                    message.value as u8,
+                );
+                let midi_message_byte: Vec<u8> = midi_message.into();
+                midi.lock().unwrap().send(&midi_message_byte).unwrap();
+            }
+            if message.midi_type == "note" {
+                let midi_message = midi_control::note_on(
+                    Channel::Ch1,
+                    message.value as u8,
+                    127,
+                );
+                let midi_message_byte: Vec<u8> = midi_message.into();
+                midi.lock().unwrap().send(&midi_message_byte).unwrap();
+            }
+            if message.midi_type == "pitch" {
+                let midi_message = midi_control::pitch_bend(
+                    Channel::Ch1,
+                    message.value as u16,
+                );
+                let midi_message_byte: Vec<u8> = midi_message.into();
+                midi.lock().unwrap().send(&midi_message_byte).unwrap();
+            }
         }
         Message::Binary(d) => {
             let message = String::from_utf8(d.clone()).unwrap();
-            println!(">>> {} sent {} bytes: {:?} message: {:?}", who, d.len(), d, message);
+            println!(
+                ">>> {} sent {} bytes: {:?} message: {:?}",
+                who,
+                d.len(),
+                d,
+                message
+            );
         }
         Message::Close(c) => {
             if let Some(cf) = c {
@@ -387,7 +434,6 @@ fn process_message(msg: Message, who: SocketAddr) -> Result<ControlFlow<(), ()>,
             }
             return Ok(ControlFlow::Break(()));
         }
-
         Message::Pong(v) => {
             println!(">>> {who} sent pong with {v:?}");
         }

@@ -28,112 +28,110 @@ const Element = ({
         }
     }
 
+    const pitchBendRangeMap = (v) => {
+        var minM = -1.0;
+        var maxM = 1.0;
+        var minV = 0;
+        var maxV = 16383;
+        var scal = (maxV - minV) / (maxM - minM);
+        return Math.trunc(minV + scal * (v - minM)); 
+    };
+
     const sendBtnMsg = (obj) => {
-        // sendOSC(obj, obj.value);
         sendMidiFromButtons(obj);
     }
 
     const sendMidiFromButtons = (obj) => {
+        const value = obj.midiType === MidiTypes.NOTE ? obj.value : 127;
         const data = {
-            midiType: obj.midiType,
+            midi_type: obj.midiType,
             channel: obj.channel,
-            value: obj.value
+            cc_value: 0,
+            value: value,
         };
         const message = JSON.stringify(data);
-        // const blob = new Blob([message], { type: "application/json" });
-        console.log("message", message);
         socket.send(message);
         sendFormattedMidiButtonMessage(data);
     }
 
     const sendFormattedMidiButtonMessage = (data) => {
-        const msg = `Type: ${data.midiType}, Channel: ${data.channel}, value: ${data.value}`;
+        const msg = `Type: ${data.midi_type}, Channel: ${data.channel}, value: ${data.value}`;
         dispatch(sendMIDIMessage(msg));
     }
 
     const sendSlideValue = (obj, v) => {
         const value = Array.isArray(v) ? v[0] : 0
         setCurrentValue(value);
-        // sendOSC(obj, value);
         sendMidiFromSliders(obj, value);
     }
 
-    // const sendOSC = (obj, value) => {
-    //     const tabAddress = currentTab.label.replace(/\s+/g, '').toLowerCase();
-    //     const address = `/${tabAddress}/${obj.oscValue}`;
-    //     const type = obj.midiType;
-    //     const data = {
-    //         type,
-    //         address,
-    //         value
-    //     };
-    //     socket.send('osc');
-    //     sendFormattedOscMessage(data);
-    // }
-
     const sendMidiFromSliders = (obj, v) => {
         const data = {
-            midiType: obj.midiType,
+            midi_type: obj.midiType,
             channel: obj.channel,
-            ccValue: obj.ccValue,
-            value: obj.midiType === MidiTypes.PITCH ? v : Math.floor(v),
+            cc_value: obj.ccValue,
+            value:
+                obj.midiType === MidiTypes.PITCH
+                ? pitchBendRangeMap(parseFloat(v))
+                : Math.floor(v),
         };
-        socket.send('MIDISLIDER', data);
+        const message = JSON.stringify(data);
+        socket.send(message);
         sendFormattedMidiSliderMessage(data);
     }
 
     const sendFormattedMidiSliderMessage = (data) => {
         let msg = '';
-        if (data.midiType === MidiTypes.CC || data.type === MidiTypes.NOTE) {
-            msg = `Type: ${data.midiType}, Channel: ${data.channel}, value1: ${data.ccValue}, value2: ${data.value}`;
+        if (data.midi_type === MidiTypes.CC || data.type === MidiTypes.NOTE) {
+            msg = `Type: ${data.midi_type}, Channel: ${data.channel}, value1: ${data.cc_value}, value2: ${data.value}`;
         } else {
-            msg = `Type: ${data.midiType}, Channel: ${data.channel}, value: ${Math.floor(data.value * 8191)}`;
+            msg = `Type: ${data.midi_type}, Channel: ${data.channel}, value: ${data.value}`;
         }
         dispatch(sendMIDIMessage(msg))
-    }
-
-    const sendFormattedOscMessage = (data) => {
-        let msg = '';
-        if (data.type === MidiTypes.CC || data.type === MidiTypes.NOTE) {
-            msg = `${data.address}, ${Math.floor(data.value)}`;
-        } else {
-            msg = `${data.address}, ${Math.floor(data.value * 8191)}`;
-        }
     }
 
     const elementsMap = {
         [ElementTypes.BTN]: (
             <OscButton
-                obj={obj}
-                onPointerDown={isEditingMode ? null : () => sendBtnMsg(obj)}
-                className="button-wrapper"
+            obj={obj}
+            onPointerDown={isEditingMode ? null : () => sendBtnMsg(obj)}
+            className="button-wrapper"
             />
         ),
         [ElementTypes.SLIDER]: (
             <div>
-                <Nouislider
-                    key={obj.id}
-                    id={obj.id}
-                    connect
-                    animate={false}
-                    start={currentValue}
-                    behaviour="drag"
-                    range={{
-                        min: [obj.midiType === MidiTypes.CC ? obj.minCcValue : obj.minPitchValue],
-                        max: [obj.midiType === MidiTypes.CC ? obj.maxCcValue : obj.maxPitchValue]
-                    }}
-                    direction='rtl'
-                    step={obj.midiType === MidiTypes.CC ? 1 : 0.001}
-                    orientation={obj.orientation}
-                    disabled={isEditingMode}
-                    onSlide={(v) => sendSlideValue(obj, v)}
-                    onEnd={() => handleResetPitch(obj)}
-                />
-                <div className='slider-label' style={{ color: obj.labelColor }}>{obj.label}</div>
+            <Nouislider
+                key={obj.id}
+                id={obj.id}
+                connect
+                animate={false}
+                start={currentValue}
+                behaviour="drag"
+                range={{
+                min: [
+                    obj.midiType === MidiTypes.CC
+                    ? obj.minCcValue
+                    : obj.minPitchValue,
+                ],
+                max: [
+                    obj.midiType === MidiTypes.CC
+                    ? obj.maxCcValue
+                    : obj.maxPitchValue,
+                ],
+                }}
+                direction="rtl"
+                step={obj.midiType === MidiTypes.CC ? 1 : 0.001}
+                orientation={obj.orientation}
+                disabled={isEditingMode}
+                onSlide={(v) => sendSlideValue(obj, v)}
+                onEnd={() => handleResetPitch(obj)}
+            />
+            <div className="slider-label" style={{ color: obj.labelColor }}>
+                {obj.label}
             </div>
-
+            </div>
         ),
-        [ElementTypes.LABEL]: <Label obj={obj} />
+        [ElementTypes.LABEL]: <Label obj={obj} />,
     };
     const elementClass = classNames({
         oscButton: obj.type === ElementTypes.BTN,

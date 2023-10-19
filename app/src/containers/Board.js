@@ -30,7 +30,6 @@ import Tabs from './Tabs';
 import { getEditedElement, getElements } from '../store/selectors/elementsSelectors';
 import { getCurrentTab, getTabs } from '../store/selectors/tabsSelectors';
 import LabelForm from './LabelForm';
-import io from 'socket.io-client';
 import TabletOverlay from "../components/TabletOverlay";
 
 library.add(faLock, faLockOpen, faPen, faEllipsisH, faExpand, faCogs);
@@ -53,7 +52,6 @@ class Board extends Component {
         socket.addEventListener("close", function (event) {
             this.props.sendConnectionStatus(ConnectionStatus.DISCONNECTED);
         });
-        // socket = io(localIp);
         this.props.setPublicIp(localIp);
         this.props.initBoard();
         // socket.addEventListener("importBackupDone", () => {
